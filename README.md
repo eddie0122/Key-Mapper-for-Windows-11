@@ -22,7 +22,7 @@ It is built for people who:
   | Shortcut → shortcut | `Ctrl+Shift+J → Alt+Tab` |
 
 - **Profiles.** A profile is a named set of remappings, such as "Work", "Gaming", or "Mac keyboard". You can create as many as you like. One profile is active at a time, and you can switch profiles from the tray icon.
-- **Automatic switching by keyboard.** You can link a keyboard to a profile. When that keyboard connects, its profile turns on. When it disconnects, the previous profile comes back.
+- **Automatic switching by keyboard.** You can link a keyboard to a profile. Its profile turns on either when that keyboard connects (and the previous one comes back when it disconnects) or when you start typing on it. You can also switch manually only.
 - **Portable.** Keymapper is a single `Keymapper.exe`. It needs no installer, runtime, or driver, and no administrator rights. Your settings are saved in one file next to the program, so you can copy both files to another PC.
 - **Runs quietly in the system tray.** You can also have Keymapper start when you sign in to Windows.
 
@@ -94,20 +94,31 @@ From the tray icon, open **Profiles** to switch the active profile without openi
 
 Tick **Start Keymapper when I sign in to Windows** in the editor. This setting applies to the whole PC, not to one profile. It starts the copy of `Keymapper.exe` you ticked it from, so tick it again if you move the program. You can also turn it off in Windows **Settings → Apps → Startup** or in Task Manager.
 
-### 9. Switch profiles automatically when a keyboard connects (optional)
+### 9. Switch profiles automatically by keyboard (optional)
 
 1. In the editor, select the profile and click **Keyboards…** in the **Auto-activate with** row.
 2. Tick the keyboards that should activate this profile. If several keyboards have similar names, click **Identify by typing** and press a key on the keyboard you mean. Keymapper selects its row.
-3. Click **OK**. The links are saved right away.
+3. Under **Switch profiles**, choose when a linked keyboard activates its profile (see below).
+4. Click **OK**. The links are saved right away.
 
-After that:
+A keyboard can be linked to one profile only. Linking it to another profile moves it.
 
-- Connecting a linked keyboard (USB or Bluetooth) activates its profile and shows a silent notification. If a linked keyboard is already connected, its profile activates right away.
-- Disconnecting it goes back to the profile that was active before.
-- If you pick a profile yourself, it stays active until another linked keyboard connects.
-- A keyboard can be linked to one profile only. Linking it to another profile moves it.
-- Tip: link your laptop's built-in keyboard to your usual profile. Keymapper then goes back to that profile when other keyboards disconnect.
-- To stop automatic switching for all profiles, untick **Switch profiles automatically** in the tray menu or in the dialog.
+You can also change the switching mode from the tray menu: **Profile switching**. It applies to all profiles:
+
+| Mode | What happens |
+|---|---|
+| **When a keyboard connects** (default) | Connecting a linked keyboard (USB or Bluetooth) activates its profile and shows a silent notification. If a linked keyboard is already connected, its profile activates right away. Disconnecting it goes back to the profile that was active before. If you pick a profile yourself, it stays active until another linked keyboard connects. |
+| **When I type on a keyboard** | Typing on a linked keyboard activates its profile, so with several keyboards connected the profile follows the one you are using. Connecting or disconnecting a keyboard alone changes nothing. There's no notification; the tray icon's tooltip shows the active profile. |
+| **Manual only** | The profile changes only when you pick one. Keyboard links are kept but not used. |
+
+Good to know about **When I type on a keyboard**:
+
+- Windows reports which keyboard a key came from only after Keymapper has handled that key, and not at all for keys the active profile remaps. So the switch happens on the first key the current profile doesn't remap, and that key (and any remapped keys before it) still use the old profile. In practice that's one or two keys.
+- If you pick a profile yourself, it stays active while you keep typing on the same keyboard. It changes when you type on a different linked keyboard.
+- Typing on a keyboard that isn't linked to any profile doesn't change the profile.
+- Typing in Keymapper's own windows never switches profiles.
+
+Tip: link your laptop's built-in keyboard to your usual profile. Keymapper then goes back to that profile when other keyboards disconnect, or when you type on the laptop again.
 
 Keyboards are recognised by their USB/Bluetooth vendor and product IDs, so two keyboards of the same model count as one keyboard. A keyboard that can connect both through a USB receiver and through Bluetooth appears as two entries.
 

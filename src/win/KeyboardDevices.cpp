@@ -112,6 +112,12 @@ HDEVNOTIFY WatchKeyboards(HWND hwnd) {
     return RegisterDeviceNotificationW(hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
 }
 
+bool ListenForKeyboards(HWND target, bool on) {
+    const DWORD flags = on ? RIDEV_INPUTSINK : RIDEV_REMOVE;
+    RAWINPUTDEVICE rid{0x01, 0x06, flags, on ? target : nullptr};  // Generic desktop / keyboard
+    return RegisterRawInputDevices(&rid, 1, sizeof rid) != FALSE;
+}
+
 std::string KeyboardIdForRawDevice(HANDLE device) {
     if (!device) return {};
     UINT chars = 0;

@@ -114,13 +114,66 @@ TEST(AutoSwitchSkipsDeletedPreviousProfile) {
     CHECK_EQ(s.activeProfileId, std::string("mech"));
 }
 
-TEST(AutoSwitchDisabled) {
+TEST(AutoSwitchConnectEventsIgnoredOutsideConnectMode) {
+    for (SwitchMode mode : {SwitchMode::Manual, SwitchMode::Typing}) {
+        Settings s = SwitchSettings();
+        s.switchMode = mode;
+        CHECK(!autoswitch::OnConnected(s, "VID_3434&PID_0281"));
+        CHECK_EQ(s.activeProfileId, std::string("plain"));
+        CHECK(!autoswitch::Reconcile(s, {"VID_3434&PID_0281"}));
+        CHECK(!autoswitch::OnDisconnected(s, "VID_3434&PID_0281"));
+        CHECK(s.switchStack.empty());
+    }
+}
+
+TEST(AutoSwitchOnTyping) {
     Settings s = SwitchSettings();
-    s.autoSwitch = false;
-    CHECK(!autoswitch::OnConnected(s, "VID_3434&PID_0281"));
-    CHECK_EQ(s.activeProfileId, std::string("plain"));
-    CHECK(!autoswitch::Reconcile(s, {"VID_3434&PID_0281"}));
+    s.switchMode = SwitchMode::Typing;
+    std::string last;
+    CHECK(autoswitch::OnTyped(s, "VID_3434&PID_0281", last));  // plain -> mech
+    CHECK_EQ(s.activeProfileId, std::string("mech"));
+    CHECK_EQ(last, std::string("VID_3434&PID_0281"));
+    CHECK(!autoswitch::OnTyped(s, "VID_3434&PID_0281", last));  // same keyboard: nothing
+    CHECK(autoswitch::OnTyped(s, "ACPI\\MSF0001", last));       // mech -> laptop
+    CHECK_EQ(s.activeProfileId, std::string("laptop"));
+    CHECK(autoswitch::OnTyped(s, "VID_3434&PID_0281", last));   // and back
+    CHECK_EQ(s.activeProfileId, std::string("mech"));
     CHECK(s.switchStack.empty());
+
+    // An unlinked keyboard keeps the profile but counts as the last one used.
+    CHECK(!autoswitch::OnTyped(s, "VID_FFFF&PID_0001", last));
+    CHECK_EQ(s.activeProfileId, std::string("mech"));
+    CHECK_EQ(last, std::string("VID_FFFF&PID_0001"));
+    CHECK(!autoswitch::OnTyped(s, "VID_3434&PID_0281", last));  // mech already active
+    CHECK_EQ(last, std::string("VID_3434&PID_0281"));
+
+    // Injected input has no device.
+    CHECK(!autoswitch::OnTyped(s, "", last));
+    CHECK_EQ(last, std::string("VID_3434&PID_0281"));
+}
+
+TEST(AutoSwitchOnTypingKeepsManualChoice) {
+    Settings s = SwitchSettings();
+    s.switchMode = SwitchMode::Typing;
+    std::string last;
+    autoswitch::OnTyped(s, "VID_3434&PID_0281", last);  // plain -> mech
+    s.activeProfileId = "plain";                        // picked by hand
+    autoswitch::OnManualActivation(s);
+    CHECK(!autoswitch::OnTyped(s, "VID_3434&PID_0281", last));  // still typing on the K2
+    CHECK_EQ(s.activeProfileId, std::string("plain"));
+    CHECK(autoswitch::OnTyped(s, "VID_046D&PID_C52B", last));   // moved to the receiver
+    CHECK_EQ(s.activeProfileId, std::string("travel"));
+}
+
+TEST(AutoSwitchOnTypingOnlyInTypingMode) {
+    for (SwitchMode mode : {SwitchMode::Connect, SwitchMode::Manual}) {
+        Settings s = SwitchSettings();
+        s.switchMode = mode;
+        std::string last;
+        CHECK(!autoswitch::OnTyped(s, "VID_3434&PID_0281", last));
+        CHECK_EQ(s.activeProfileId, std::string("plain"));
+        CHECK(last.empty());
+    }
 }
 
 TEST(AutoSwitchReconcileAtStartup) {
@@ -142,14 +195,27 @@ TEST(AutoSwitchReconcileAtStartup) {
 TEST(AutoSwitchSettingsRoundTrip) {
     Settings s = SwitchSettings();
     autoswitch::OnConnected(s, "VID_3434&PID_0281");
-    s.autoSwitch = false;
     Settings back;
     std::string err;
-    CHECK(DeserializeSettings(SerializeSettings(s), back, err));
-    CHECK(back == s);
-    // Files written before this feature still load, with switching on.
+    for (SwitchMode mode : {SwitchMode::Connect, SwitchMode::Typing, SwitchMode::Manual}) {
+        s.switchMode = mode;
+        CHECK(DeserializeSettings(SerializeSettings(s), back, err));
+        CHECK(back == s);
+    }
+    // Files written before this feature still load, with switching on connect.
     CHECK(DeserializeSettings(R"({"version":1,"profiles":[{"id":"a","name":"A"}]})", back, err));
-    CHECK(back.autoSwitch);
+    CHECK(back.switchMode == SwitchMode::Connect);
     CHECK(back.profiles[0].keyboards.empty());
+    // Files from before switching modes: on/off only.
+    CHECK(DeserializeSettings(R"({"version":1,"profiles":[{"id":"a","name":"A"}],"autoSwitch":{"enabled":true}})",
+                              back, err));
+    CHECK(back.switchMode == SwitchMode::Connect);
+    CHECK(DeserializeSettings(R"({"version":1,"profiles":[{"id":"a","name":"A"}],"autoSwitch":{"enabled":false}})",
+                              back, err));
+    CHECK(back.switchMode == SwitchMode::Manual);
+    // A mode from a newer version falls back to "enabled" instead of failing.
+    CHECK(DeserializeSettings(
+        R"({"version":1,"profiles":[{"id":"a","name":"A"}],"autoSwitch":{"enabled":false,"mode":"future"}})", back, err));
+    CHECK(back.switchMode == SwitchMode::Manual);
     CHECK(!DeserializeSettings(R"({"version":1,"profiles":[{"id":"a","name":"A","keyboards":[{"id":""}]}]})", back, err));
 }

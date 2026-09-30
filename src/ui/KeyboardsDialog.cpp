@@ -13,7 +13,18 @@
 namespace km {
 namespace {
 
-enum : int { IDC_INTRO = 100, IDC_LIST, IDC_IDENTIFY, IDC_REFRESH, IDC_STATUS, IDC_AUTOSWITCH, IDC_NOTE };
+enum : int {
+    IDC_INTRO = 100,
+    IDC_LIST,
+    IDC_IDENTIFY,
+    IDC_REFRESH,
+    IDC_STATUS,
+    IDC_MODE_LABEL,
+    IDC_MODE_CONNECT,  // IDC_MODE_CONNECT + SwitchMode value gives each mode's radio button.
+    IDC_MODE_TYPING,
+    IDC_MODE_MANUAL,
+    IDC_NOTE
+};
 enum Column : int { COL_NAME = 0, COL_STATUS, COL_OWNER };
 
 struct Row {
@@ -40,7 +51,8 @@ private:
     std::wstring profileName(const std::string& id) const;
     void startIdentify();
     void stopIdentify();
-    void onRawInput(HRAWINPUT input);
+    void onKeyboardTyped(const std::string& id);
+    SwitchMode chosenMode() const;
     bool save();
 
     App& app_;
@@ -53,7 +65,7 @@ private:
     std::vector<Row> rows_;
     ui::Fonts fonts_;
     HWND intro_ = nullptr, list_ = nullptr, identify_ = nullptr, refresh_ = nullptr, status_ = nullptr;
-    HWND autoSwitch_ = nullptr, note_ = nullptr, ok_ = nullptr, cancel_ = nullptr;
+    HWND modeLabel_ = nullptr, modes_[3] = {}, note_ = nullptr, ok_ = nullptr, cancel_ = nullptr;
 };
 
 std::wstring Dialog::profileName(const std::string& id) const {
@@ -130,8 +142,7 @@ void Dialog::updateRow(int i) {
 }
 
 void Dialog::startIdentify() {
-    RAWINPUTDEVICE rid{0x01, 0x06, RIDEV_INPUTSINK, hwnd_};  // Generic desktop / keyboard
-    if (!RegisterRawInputDevices(&rid, 1, sizeof rid)) {
+    if (!app_.beginIdentify([this](const std::string& id) { onKeyboardTyped(id); })) {
         SetWindowTextW(status_, L"Windows didn't allow identifying keyboards right now.");
         return;
     }
@@ -145,20 +156,14 @@ void Dialog::startIdentify() {
 void Dialog::stopIdentify() {
     if (!identifying_) return;
     identifying_ = false;
-    RAWINPUTDEVICE rid{0x01, 0x06, RIDEV_REMOVE, nullptr};
-    RegisterRawInputDevices(&rid, 1, sizeof rid);
+    app_.endIdentify();
     app_.hook().setEnabled(app_.settings().enabled);
     // The identifying keystroke must not also press a button here.
     ignoreKeysUntil_ = GetTickCount64() + 400;
     if (identify_) SetWindowTextW(identify_, L"Identify by typing");
 }
 
-void Dialog::onRawInput(HRAWINPUT input) {
-    RAWINPUTHEADER header{};
-    UINT size = sizeof header;
-    if (GetRawInputData(input, RID_HEADER, &header, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1)) return;
-    const std::string id = KeyboardIdForRawDevice(header.hDevice);
-    if (id.empty()) return;  // Injected or virtual input.
+void Dialog::onKeyboardTyped(const std::string& id) {
     stopIdentify();
     auto it = std::find_if(rows_.begin(), rows_.end(), [&](const Row& r) { return r.id == id; });
     if (it == rows_.end()) {
@@ -205,9 +210,15 @@ bool Dialog::save() {
         }
     }
     if (!(next == app_.settings()) && !app_.commit(std::move(next))) return false;
-    app_.setAutoSwitch(SendMessageW(autoSwitch_, BM_GETCHECK, 0, 0) == BST_CHECKED);
-    if (app_.settings().autoSwitch) app_.keyboardsAssigned(newlyAssigned);
+    app_.setSwitchMode(chosenMode());
+    if (app_.settings().switchMode == SwitchMode::Connect) app_.keyboardsAssigned(newlyAssigned);
     return true;
+}
+
+SwitchMode Dialog::chosenMode() const {
+    for (int i = 0; i < 3; ++i)
+        if (SendMessageW(modes_[i], BM_GETCHECK, 0, 0) == BST_CHECKED) return static_cast<SwitchMode>(i);
+    return app_.settings().switchMode;
 }
 
 void Dialog::run(HWND owner) {
@@ -232,8 +243,7 @@ void Dialog::run(HWND owner) {
 
     intro_ = ui::Child(hwnd_, L"STATIC",
                        (L"Tick the keyboards that should activate “" + profileName(profileId_) +
-                        L"” when they connect. When a ticked keyboard disconnects, Keymapper returns to the "
-                        L"profile that was active before.")
+                        L"”. Choose below whether that happens when a keyboard connects or when you type on it.")
                            .c_str(),
                        SS_NOPREFIX, IDC_INTRO);
     list_ = ui::Child(hwnd_, WC_LISTVIEWW, L"",
@@ -243,13 +253,20 @@ void Dialog::run(HWND owner) {
     identify_ = ui::Child(hwnd_, L"BUTTON", L"Identify by typing", WS_TABSTOP | BS_PUSHBUTTON, IDC_IDENTIFY);
     refresh_ = ui::Child(hwnd_, L"BUTTON", L"Refresh", WS_TABSTOP | BS_PUSHBUTTON, IDC_REFRESH);
     status_ = ui::Child(hwnd_, L"STATIC", L"", SS_NOPREFIX, IDC_STATUS);
-    autoSwitch_ = ui::Child(hwnd_, L"BUTTON", L"Switch profiles automatically when keyboards connect (all profiles)",
-                            WS_TABSTOP | BS_AUTOCHECKBOX, IDC_AUTOSWITCH);
-    SendMessageW(autoSwitch_, BM_SETCHECK, app_.settings().autoSwitch ? BST_CHECKED : BST_UNCHECKED, 0);
+    modeLabel_ = ui::Child(hwnd_, L"STATIC", L"Switch profiles (applies to all profiles):", SS_NOPREFIX, IDC_MODE_LABEL);
+    const wchar_t* modeNames[] = {L"When a keyboard connects", L"When I type on a keyboard", L"Manual only"};
+    for (int i = 0; i < 3; ++i) {
+        // The first radio button starts the group and is the tab stop.
+        modes_[i] = ui::Child(hwnd_, L"BUTTON", modeNames[i], BS_AUTORADIOBUTTON | (i == 0 ? WS_GROUP | WS_TABSTOP : 0),
+                              IDC_MODE_CONNECT + i);
+    }
+    const int current = static_cast<int>(app_.settings().switchMode);
+    SendMessageW(modes_[current], BM_SETCHECK, BST_CHECKED, 0);
     note_ = ui::Child(hwnd_, L"STATIC",
                       L"While a profile is active its mappings apply to every keyboard: Windows doesn't tell apps "
-                      L"which keyboard a key came from.",
-                      SS_NOPREFIX, IDC_NOTE);
+                      L"which keyboard a key came from. When switching on typing, the switch happens on the first key "
+                      L"the current profile doesn't remap.",
+                      SS_NOPREFIX | WS_GROUP, IDC_NOTE);
     ok_ = ui::Child(hwnd_, L"BUTTON", L"OK", WS_TABSTOP | BS_DEFPUSHBUTTON, IDOK);
     cancel_ = ui::Child(hwnd_, L"BUTTON", L"Cancel", WS_TABSTOP | BS_PUSHBUTTON, IDCANCEL);
     ui::SetAccessibleName(list_, L"Keyboards");
@@ -302,10 +319,14 @@ int Dialog::layout(bool apply) {
     y += 38;
     place(status_, M, y, inner, 22);
     y += 28;
-    place(autoSwitch_, M, y, inner, 24);
-    y += 30;
-    place(note_, M, y, inner, 36);
-    y += 44;
+    place(modeLabel_, M, y, inner, 22);
+    y += 24;
+    place(modes_[0], M, y, 200, 24);
+    place(modes_[1], M + 208, y, 210, 24);
+    place(modes_[2], M + 426, y, inner - 426, 24);
+    y += 32;
+    place(note_, M, y, inner, 54);
+    y += 62;
     place(ok_, W - M - 88 - 8 - 88, y, 88, 30);
     place(cancel_, W - M - 88, y, 88, 30);
     y += 30 + M;
@@ -324,9 +345,6 @@ LRESULT CALLBACK Dialog::Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 LRESULT Dialog::handle(UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-        case WM_INPUT:
-            if (identifying_) onRawInput(reinterpret_cast<HRAWINPUT>(lp));
-            return DefWindowProcW(hwnd_, msg, wp, lp);
         case WM_ACTIVATE:
             if (LOWORD(wp) == WA_INACTIVE) stopIdentify();
             break;

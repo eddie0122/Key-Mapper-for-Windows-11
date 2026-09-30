@@ -70,12 +70,19 @@ struct SwitchEntry {
     bool operator==(const SwitchEntry&) const = default;
 };
 
+// What makes a keyboard's linked profile active.
+enum class SwitchMode : uint8_t {
+    Connect = 0,  // The keyboard connecting; disconnecting restores the previous profile.
+    Typing = 1,   // Typing on the keyboard.
+    Manual = 2,   // Nothing: links are kept but ignored.
+};
+
 struct Settings {
     bool enabled = true;
     std::string activeProfileId;
     std::vector<Profile> profiles;
-    bool autoSwitch = true;                // Switch profiles when keyboards connect.
-    std::vector<SwitchEntry> switchStack;  // Most recent automatic switch last.
+    SwitchMode switchMode = SwitchMode::Connect;
+    std::vector<SwitchEntry> switchStack;  // Most recent automatic switch last (Connect mode only).
 
     Profile* find(std::string_view id);
     const Profile* find(std::string_view id) const;

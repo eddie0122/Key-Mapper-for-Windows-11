@@ -26,7 +26,17 @@ constexpr UINT_PTR kKeyboardTimer = 2;
 // One keyboard fires several interface events; act once they settle.
 constexpr UINT kKeyboardSettleMs = 700;
 
-enum : UINT { ID_OPEN = 1, ID_CHOOSER, ID_TOGGLE, ID_AUTOSWITCH, ID_EXIT, ID_PROFILE0 = 1000 };
+// ID_MODE_CONNECT + SwitchMode value gives each mode's menu item.
+enum : UINT {
+    ID_OPEN = 1,
+    ID_CHOOSER,
+    ID_TOGGLE,
+    ID_MODE_CONNECT,
+    ID_MODE_TYPING,
+    ID_MODE_MANUAL,
+    ID_EXIT,
+    ID_PROFILE0 = 1000
+};
 
 std::wstring ExecutableDirectory() {
     std::wstring path(MAX_PATH, L'\0');
@@ -89,6 +99,7 @@ int App::run(bool showEditorAtStart) {
     addTrayIcon();
     keyboardNotify_ = WatchKeyboards(controller_);
     rescanKeyboards(/*reconcile=*/true);
+    updateRawInput();
     if (showEditorAtStart) showEditor();
 
     MSG msg;
@@ -193,13 +204,61 @@ void App::activateProfile(const std::string& id) {
     commit(std::move(next), true);
 }
 
-void App::setAutoSwitch(bool enabled) {
-    if (settings_.autoSwitch == enabled) return;
+void App::setSwitchMode(SwitchMode mode) {
+    if (settings_.switchMode == mode) return;
     Settings next = settings_;
-    next.autoSwitch = enabled;
-    if (!enabled) next.switchStack.clear();
+    next.switchMode = mode;
+    if (mode != SwitchMode::Connect) next.switchStack.clear();
     commit(std::move(next), true);
-    if (enabled) rescanKeyboards(/*reconcile=*/true);
+    // In Typing mode the next keystroke on a linked keyboard selects its profile.
+    lastTyped_.clear();
+    updateRawInput();
+    if (mode == SwitchMode::Connect) rescanKeyboards(/*reconcile=*/true);
+}
+
+bool App::beginIdentify(std::function<void(const std::string&)> sink) {
+    identifySink_ = std::move(sink);
+    if (updateRawInput()) return true;
+    identifySink_ = nullptr;
+    return false;
+}
+
+void App::endIdentify() {
+    identifySink_ = nullptr;
+    updateRawInput();
+}
+
+// Raw input tells which keyboard a key came from. It is only needed while
+// switching on typing or identifying a keyboard.
+bool App::updateRawInput() {
+    const bool want = controller_ && !exiting_ && (settings_.switchMode == SwitchMode::Typing || identifySink_);
+    if (want == rawInputOn_) return true;
+    if (!ListenForKeyboards(controller_, want) && want) return false;
+    rawInputOn_ = want;
+    return true;
+}
+
+void App::onRawInput(HRAWINPUT input, bool foreground) {
+    RAWINPUT raw{};
+    UINT size = sizeof raw;
+    if (GetRawInputData(input, RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1) ||
+        raw.header.dwType != RIM_TYPEKEYBOARD || !raw.header.hDevice)
+        return;  // Injected input has no device.
+    if (raw.data.keyboard.Flags & RI_KEY_BREAK) return;
+    auto it = rawIds_.find(raw.header.hDevice);
+    if (it == rawIds_.end()) it = rawIds_.emplace(raw.header.hDevice, KeyboardIdForRawDevice(raw.header.hDevice)).first;
+    const std::string& id = it->second;
+    if (id.empty()) return;
+    if (identifySink_) {
+        // The sink may end identifying, which clears it.
+        auto sink = identifySink_;
+        sink(id);
+        return;
+    }
+    // Typing into Keymapper's own windows (editor, key capture) never switches.
+    if (foreground) return;
+    Settings next = settings_;
+    if (autoswitch::OnTyped(next, id, lastTyped_)) commit(std::move(next), true);
 }
 
 void App::keyboardsAssigned(const std::vector<std::string>& ids) {
@@ -228,6 +287,7 @@ std::wstring App::keyboardName(const std::string& id) const {
 void App::rescanKeyboards(bool reconcile) {
     std::map<std::string, std::wstring> now;
     for (KeyboardDevice& d : EnumerateKeyboards()) now[d.id] = std::move(d.name);
+    rawIds_.clear();  // Windows reuses device handles for other keyboards.
 
     Settings next = settings_;
     std::wstring message;
@@ -312,6 +372,8 @@ void App::requestExit() {
 void App::shutdown() {
     if (exiting_) return;
     exiting_ = true;
+    identifySink_ = nullptr;
+    updateRawInput();
     if (keyboardNotify_) {
         UnregisterDeviceNotification(keyboardNotify_);
         keyboardNotify_ = nullptr;
@@ -420,8 +482,13 @@ void App::showTrayMenu(POINT pt) {
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(profiles), label.c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, ID_TOGGLE, settings_.enabled ? L"P&ause remapping" : L"&Resume remapping");
-    AppendMenuW(menu, MF_STRING | (settings_.autoSwitch ? MF_CHECKED : 0), ID_AUTOSWITCH,
-                L"Switch profiles &automatically");
+    HMENU modes = CreatePopupMenu();
+    AppendMenuW(modes, MF_STRING, ID_MODE_CONNECT, L"When a keyboard &connects");
+    AppendMenuW(modes, MF_STRING, ID_MODE_TYPING, L"When I &type on a keyboard");
+    AppendMenuW(modes, MF_STRING, ID_MODE_MANUAL, L"&Manual only");
+    CheckMenuRadioItem(modes, ID_MODE_CONNECT, ID_MODE_MANUAL,
+                       ID_MODE_CONNECT + static_cast<UINT>(settings_.switchMode), MF_BYCOMMAND);
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(modes), L"Profile &switching");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, ID_EXIT, L"E&xit");
 
@@ -438,8 +505,8 @@ void App::showTrayMenu(POINT pt) {
         showProfileChooser();
     } else if (cmd == ID_TOGGLE) {
         setEnabled(!settings_.enabled);
-    } else if (cmd == ID_AUTOSWITCH) {
-        setAutoSwitch(!settings_.autoSwitch);
+    } else if (cmd >= ID_MODE_CONNECT && cmd <= ID_MODE_MANUAL) {
+        setSwitchMode(static_cast<SwitchMode>(cmd - ID_MODE_CONNECT));
     } else if (cmd == ID_EXIT) {
         requestExit();
     } else if (cmd >= ID_PROFILE0 && cmd < ID_PROFILE0 + n) {
@@ -483,6 +550,9 @@ LRESULT App::handle(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     switch (msg) {
+        case WM_INPUT:
+            onRawInput(reinterpret_cast<HRAWINPUT>(lp), GET_RAWINPUT_CODE_WPARAM(wp) == RIM_INPUT);
+            break;  // DefWindowProc frees the input.
         case WM_DEVICECHANGE:
             if (wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE || wp == DBT_DEVNODES_CHANGED)
                 SetTimer(controller_, kKeyboardTimer, kKeyboardSettleMs, nullptr);

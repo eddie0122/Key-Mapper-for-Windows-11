@@ -88,7 +88,7 @@ const Profile* ProfileForKeyboard(const Settings& s, const std::string& deviceId
 namespace autoswitch {
 
 bool OnConnected(Settings& s, const std::string& deviceId) {
-    if (!s.autoSwitch) return false;
+    if (s.switchMode != SwitchMode::Connect) return false;
     const Profile* p = ProfileForKeyboard(s, deviceId);
     if (!p) return false;
     auto& stack = s.switchStack;
@@ -113,7 +113,7 @@ bool OnDisconnected(Settings& s, const std::string& deviceId) {
         it->previousProfileId = entry.previousProfileId;
         return false;
     }
-    if (!s.autoSwitch || s.activeProfileId != entry.profileId || entry.previousProfileId == entry.profileId ||
+    if (s.switchMode != SwitchMode::Connect || s.activeProfileId != entry.profileId || entry.previousProfileId == entry.profileId ||
         !s.find(entry.previousProfileId))
         return false;
     s.activeProfileId = entry.previousProfileId;
@@ -121,7 +121,7 @@ bool OnDisconnected(Settings& s, const std::string& deviceId) {
 }
 
 bool Reconcile(Settings& s, const std::set<std::string>& connected) {
-    if (!s.autoSwitch) {
+    if (s.switchMode != SwitchMode::Connect) {
         s.switchStack.clear();
         return false;
     }
@@ -142,6 +142,15 @@ bool Reconcile(Settings& s, const std::set<std::string>& connected) {
 }
 
 void OnManualActivation(Settings& s) { s.switchStack.clear(); }
+
+bool OnTyped(Settings& s, const std::string& deviceId, std::string& lastTyped) {
+    if (s.switchMode != SwitchMode::Typing || deviceId.empty() || deviceId == lastTyped) return false;
+    lastTyped = deviceId;
+    const Profile* p = ProfileForKeyboard(s, deviceId);
+    if (!p || s.activeProfileId == p->id) return false;
+    s.activeProfileId = p->id;
+    return true;
+}
 
 }  // namespace autoswitch
 

@@ -40,6 +40,11 @@ bool Reconcile(Settings& s, const std::set<std::string>& connected);
 // The user picked a profile by hand; later disconnects leave it alone.
 void OnManualActivation(Settings& s);
 
+// Typing mode: a key arrived from `deviceId`. Switches only when the device
+// differs from `lastTyped` (updated here), so a hand-picked profile stays
+// while the user keeps typing on the same keyboard.
+bool OnTyped(Settings& s, const std::string& deviceId, std::string& lastTyped);
+
 }  // namespace autoswitch
 
 }  // namespace km

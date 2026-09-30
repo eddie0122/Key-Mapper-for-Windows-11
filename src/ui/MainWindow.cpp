@@ -554,7 +554,8 @@ void MainWindow::refreshHeader() {
         }
     }
     if (keyboards.empty()) keyboards = L"No keyboard — activate this profile manually";
-    else if (!s.autoSwitch) keyboards += L"   [automatic switching is off]";
+    else if (s.switchMode == SwitchMode::Manual) keyboards += L"   [manual switching — links are ignored]";
+    else if (s.switchMode == SwitchMode::Typing) keyboards += L"   [switches when you type]";
     SetWindowTextW(kbdSummary_, keyboards.c_str());
 }
 

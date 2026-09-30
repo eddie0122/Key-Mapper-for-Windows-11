@@ -100,7 +100,14 @@ bool KeyboardsFromJson(const JValue* v, std::vector<KeyboardRef>& out) {
 bool SwitchSettingsFromJson(const JValue& v, Settings& s) {
     if (const JValue* en = v.find("enabled")) {
         if (!en->isBool()) return false;
-        s.autoSwitch = en->b;
+        s.switchMode = en->b ? SwitchMode::Connect : SwitchMode::Manual;
+    }
+    // Files from before switching modes only have "enabled". An unknown mode
+    // (from a newer version) keeps what "enabled" says.
+    if (const JValue* mode = v.find("mode"); mode && mode->isString()) {
+        if (mode->s == "connect") s.switchMode = SwitchMode::Connect;
+        else if (mode->s == "typing") s.switchMode = SwitchMode::Typing;
+        else if (mode->s == "manual") s.switchMode = SwitchMode::Manual;
     }
     if (const JValue* stack = v.find("stack")) {
         if (!stack->isArray()) return false;
@@ -144,7 +151,11 @@ std::string SerializeSettings(const Settings& s) {
     }
     root.set("profiles", std::move(profiles));
     JValue autoSwitch = JValue::Object();
-    autoSwitch.set("enabled", JValue::Bool(s.autoSwitch));
+    // "enabled" lets versions without modes treat any automatic mode as Connect.
+    autoSwitch.set("enabled", JValue::Bool(s.switchMode != SwitchMode::Manual));
+    autoSwitch.set("mode", JValue::String(s.switchMode == SwitchMode::Typing   ? "typing"
+                                          : s.switchMode == SwitchMode::Manual ? "manual"
+                                                                               : "connect"));
     JValue stack = JValue::Array();
     for (const SwitchEntry& e : s.switchStack) {
         JValue o = JValue::Object();

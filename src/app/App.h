@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -42,12 +43,16 @@ public:
     void setEnabled(bool enabled);
     // Manual choice from the editor or tray; ends any automatic switch chain.
     void activateProfile(const std::string& id);
-    void setAutoSwitch(bool enabled);
+    void setSwitchMode(SwitchMode mode);
     // Keyboards were just assigned to a profile: those already connected
     // count as connecting now.
     void keyboardsAssigned(const std::vector<std::string>& ids);
     // Keyboards connected right now (id -> name).
     const std::map<std::string, std::wstring>& connectedKeyboards() const { return connected_; }
+    // Routes the id of each keyboard typed on to `sink` instead of switching
+    // profiles, until endIdentify. Returns false if Windows refused.
+    bool beginIdentify(std::function<void(const std::string&)> sink);
+    void endIdentify();
 
     void showEditor();
     void showProfileChooser();
@@ -66,6 +71,9 @@ private:
     void showSaveError(const std::wstring& error, bool appliedAnyway);
     void notifyChanged();
     void rescanKeyboards(bool reconcile);
+    bool updateRawInput();
+    // `foreground`: one of Keymapper's windows had the focus (RIM_INPUT).
+    void onRawInput(HRAWINPUT input, bool foreground);
     void showNotification(const std::wstring& text);
     std::wstring keyboardName(const std::string& id) const;
     void shutdown();
@@ -89,6 +97,10 @@ private:
 
     HDEVNOTIFY keyboardNotify_ = nullptr;
     std::map<std::string, std::wstring> connected_;
+    bool rawInputOn_ = false;
+    std::map<HANDLE, std::string> rawIds_;  // Raw-input device handle -> keyboard id.
+    std::string lastTyped_;                 // Keyboard typed on most recently (Typing mode).
+    std::function<void(const std::string&)> identifySink_;
 };
 
 }  // namespace km
