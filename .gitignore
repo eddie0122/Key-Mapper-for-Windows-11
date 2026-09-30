@@ -1,0 +1,13 @@
+/build*/
+/out/
+/dist/
+/.vs/
+/.vscode/
+CMakeUserPresets.json
+*.user
+
+# Created at run time next to the executable.
+keymapper.settings.json
+keymapper.settings.json.bak
+keymapper.settings.json.tmp
+keymapper.settings.corrupt-*.json
